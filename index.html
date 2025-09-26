@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>CSV Editor</title>
+		<link rel="stylesheet" href="style.css" />
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+		<script src="script.js" defer></script>
+	</head>
+	<body>
+		<header class="header">
+			<div class="controls">
+				<input type="file" id="csvFile" accept=".csv" class="file-input" />
+				<label for="csvFile" class="upload-btn">Upload CSV</label>
+				<button id="saveBtn" class="save-btn" disabled>Save CSV</button>
+			</div>
+			<div class="info">
+				<span id="fileName"></span>
+				<span id="rowCount"></span>
+			</div>
+		</header>
+
+		<!-- Progress overlay -->
+		<div id="progressOverlay" class="progress-overlay hidden">
+			<div class="progress-container">
+				<div class="progress-info">
+					<span id="progressText">Processing...</span>
+					<span id="progressPercent">0%</span>
+				</div>
+				<div class="progress-bar">
+					<div id="progressFill" class="progress-fill"></div>
+				</div>
+				<div class="progress-details">
+					<span id="progressDetails"></span>
+				</div>
+			</div>
+		</div>
+
+		<main class="main-content">
+			<div id="tableContainer" class="table-container">
+				<div class="placeholder">
+					<p>Upload a CSV file to start editing</p>
+				</div>
+			</div>
+		</main>
+	</body>
+</html>
