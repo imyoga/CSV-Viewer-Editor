@@ -135,7 +135,7 @@ body {
 	background: #f8f9fa;
 	border: 1px solid #e1e5e9;
 	border-top: none;
-	padding: 8px 12px;
+	padding: 6px 12px;
 	text-align: left;
 	font-weight: 600;
 	color: #374151;
@@ -155,7 +155,7 @@ body {
 .csv-table td {
 	border: 1px solid #e1e5e9;
 	border-top: none;
-	padding: 8px 12px;
+	padding: 5px 12px;
 	cursor: text;
 	position: relative;
 	min-width: 100px;
@@ -173,8 +173,17 @@ body {
 	border-right: none;
 }
 
-.csv-table tbody tr:hover {
+/* Alternating row colors */
+.csv-table tbody tr:nth-child(even) {
 	background: #f8f9fa;
+}
+
+.csv-table tbody tr:nth-child(odd) {
+	background: #ffffff;
+}
+
+.csv-table tbody tr:hover {
+	background: #e3f2fd !important;
 }
 
 .csv-table td:hover {
@@ -190,7 +199,7 @@ body {
 	width: 100%;
 	height: 100%;
 	border: none;
-	padding: 8px 12px;
+	padding: 5px 12px;
 	font-size: 13px;
 	font-family: inherit;
 	background: transparent;

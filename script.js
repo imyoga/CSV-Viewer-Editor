@@ -275,14 +275,31 @@ class CSVEditor {
 				}
 
 				this.csvData[row][col] = newValue
-				this.isEdited = true
 
-				// Track edited cell
+				// Get the original value from originalCsvData for comparison
+				let originalValue = ''
+				if (this.originalCsvData[row] && this.originalCsvData[row][col] !== undefined) {
+					originalValue = this.originalCsvData[row][col]
+				}
+
 				const cellKey = `${row}:${col}`
-				this.editedCells.add(cellKey)
-
-				// Add edited class to cell for highlighting
-				cell.classList.add('edited')
+				
+				// Only mark as edited if the value actually changed from the original
+				if (newValue !== originalValue) {
+					// Track edited cell
+					this.editedCells.add(cellKey)
+					// Add edited class to cell for highlighting
+					cell.classList.add('edited')
+					this.isEdited = true
+				} else {
+					// Value was reverted back to original, remove from edited cells
+					this.editedCells.delete(cellKey)
+					// Remove edited class from cell
+					cell.classList.remove('edited')
+					
+					// Check if there are any other edited cells to determine isEdited state
+					this.isEdited = this.editedCells.size > 0
+				}
 
 				// Update save button state
 				this.updateSaveButtonState()
