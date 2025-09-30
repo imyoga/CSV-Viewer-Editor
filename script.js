@@ -1,8 +1,10 @@
 class CSVEditor {
 	constructor() {
 		this.csvData = []
+		this.originalCsvData = [] // Store original data for reset functionality
 		this.fileName = ''
 		this.isEdited = false
+		this.editedCells = new Set() // Track edited cells by row:col coordinates
 
 		this.initializeElements()
 		this.bindEvents()
@@ -11,6 +13,7 @@ class CSVEditor {
 	initializeElements() {
 		this.fileInput = document.getElementById('csvFile')
 		this.saveBtn = document.getElementById('saveBtn')
+		this.resetBtn = document.getElementById('resetBtn')
 		this.tableContainer = document.getElementById('tableContainer')
 		this.fileNameSpan = document.getElementById('fileName')
 		this.rowCountSpan = document.getElementById('rowCount')
@@ -26,6 +29,7 @@ class CSVEditor {
 	bindEvents() {
 		this.fileInput.addEventListener('change', (e) => this.handleFileUpload(e))
 		this.saveBtn.addEventListener('click', () => this.saveCSV())
+		this.resetBtn.addEventListener('click', () => this.resetChanges())
 
 		// Handle keyboard shortcuts
 		document.addEventListener('keydown', (e) => {
@@ -33,6 +37,11 @@ class CSVEditor {
 				e.preventDefault()
 				if (!this.saveBtn.disabled) {
 					this.saveCSV()
+				}
+			} else if (e.ctrlKey && e.key === 'r') {
+				e.preventDefault()
+				if (!this.resetBtn.disabled) {
+					this.resetChanges()
 				}
 			}
 		})
@@ -64,6 +73,11 @@ class CSVEditor {
 
 		this.fileName = file.name
 		this.fileNameSpan.textContent = this.fileName
+		
+		// Clear edited cells state for new file
+		this.editedCells.clear()
+		this.isEdited = false
+		this.resetBtn.disabled = true
 
 		// Show progress for large files (>1MB)
 		const showProgress = file.size > 1024 * 1024
@@ -95,6 +109,9 @@ class CSVEditor {
 							this.csvData.pop()
 						}
 
+						// Store original data for reset functionality
+						this.originalCsvData = JSON.parse(JSON.stringify(this.csvData))
+
 						if (showProgress) {
 							this.updateProgress(90, 'Rendering table...')
 						}
@@ -104,6 +121,7 @@ class CSVEditor {
 								this.renderTable()
 								this.updateRowCount()
 								this.saveBtn.disabled = false
+								this.resetBtn.disabled = false
 
 								if (showProgress) {
 									this.updateProgress(100, 'Complete!')
@@ -199,6 +217,12 @@ class CSVEditor {
 				cell.dataset.col = j
 				cell.title = cell.textContent
 
+				// Check if this cell was previously edited
+				const cellKey = `${i}:${j}`
+				if (this.editedCells.has(cellKey)) {
+					cell.classList.add('edited')
+				}
+
 				// Make cell editable
 				this.makeCellEditable(cell)
 
@@ -253,6 +277,13 @@ class CSVEditor {
 				this.csvData[row][col] = newValue
 				this.isEdited = true
 
+				// Track edited cell
+				const cellKey = `${row}:${col}`
+				this.editedCells.add(cellKey)
+
+				// Add edited class to cell for highlighting
+				cell.classList.add('edited')
+
 				// Update save button state
 				this.updateSaveButtonState()
 			}
@@ -290,6 +321,28 @@ class CSVEditor {
 
 	updateSaveButtonState() {
 		this.saveBtn.textContent = this.isEdited ? 'Save CSV *' : 'Save CSV'
+		// Enable/disable reset button based on whether there are changes
+		this.resetBtn.disabled = !this.isEdited || this.csvData.length === 0
+	}
+
+	resetChanges() {
+		if (!this.isEdited || this.originalCsvData.length === 0) return
+
+		// Show confirmation dialog
+		if (!confirm('Are you sure you want to reset all changes? This action cannot be undone.')) {
+			return
+		}
+
+		// Reset data to original
+		this.csvData = JSON.parse(JSON.stringify(this.originalCsvData))
+		
+		// Clear edited cells tracking
+		this.editedCells.clear()
+		this.isEdited = false
+
+		// Re-render table and update UI
+		this.renderTable()
+		this.updateSaveButtonState()
 	}
 
 	saveCSV() {

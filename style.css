@@ -39,7 +39,8 @@ body {
 }
 
 .upload-btn,
-.save-btn {
+.save-btn,
+.reset-btn {
 	padding: 6px 12px;
 	border: 1px solid #d1d5db;
 	border-radius: 4px;
@@ -50,7 +51,8 @@ body {
 }
 
 .upload-btn:hover,
-.save-btn:hover:not(:disabled) {
+.save-btn:hover:not(:disabled),
+.reset-btn:hover:not(:disabled) {
 	background: #f3f4f6;
 	border-color: #9ca3af;
 }
@@ -65,11 +67,23 @@ body {
 	background: #1d4ed8;
 }
 
-.save-btn:disabled {
+.save-btn:disabled,
+.reset-btn:disabled {
 	background: #e5e7eb;
 	color: #9ca3af;
 	cursor: not-allowed;
 	border-color: #e5e7eb;
+}
+
+.reset-btn {
+	background: #dc2626;
+	color: white;
+	border-color: #dc2626;
+}
+
+.reset-btn:hover:not(:disabled) {
+	background: #b91c1c;
+	border-color: #b91c1c;
 }
 
 .info {
@@ -182,6 +196,22 @@ body {
 	background: transparent;
 	outline: 2px solid #2563eb;
 	outline-offset: -2px;
+}
+
+.csv-table td.edited {
+	background: #fef3c7 !important;
+	border-left: 3px solid #f59e0b !important;
+	position: relative;
+}
+
+.csv-table td.edited::after {
+	content: '●';
+	position: absolute;
+	top: 2px;
+	right: 4px;
+	color: #f59e0b;
+	font-size: 8px;
+	line-height: 1;
 }
 
 .row-number {
