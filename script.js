@@ -24,6 +24,7 @@ class CSVEditor {
 		this.progressPercent = document.getElementById('progressPercent')
 		this.progressFill = document.getElementById('progressFill')
 		this.progressDetails = document.getElementById('progressDetails')
+		
 	}
 
 	bindEvents() {
@@ -78,6 +79,9 @@ class CSVEditor {
 		this.editedCells.clear()
 		this.isEdited = false
 		this.resetBtn.disabled = true
+		
+		// Clear previous row count and show loading state
+		this.rowCountSpan.textContent = 'Loading...'
 
 		// Show progress for large files (>1MB)
 		const showProgress = file.size > 1024 * 1024
@@ -92,6 +96,12 @@ class CSVEditor {
 
 		Papa.parse(file, {
 			complete: (result) => {
+				// Check if Papa Parse failed to read the file
+				if (result.data.length === 0 && result.errors.length === 0) {
+					this.handleFileWithFileReader(file, showProgress)
+					return
+				}
+				
 				if (showProgress) {
 					this.updateProgress(70, 'Processing CSV data...')
 				}
@@ -111,6 +121,9 @@ class CSVEditor {
 
 						// Store original data for reset functionality
 						this.originalCsvData = JSON.parse(JSON.stringify(this.csvData))
+						
+						// Update row count immediately after data processing
+						this.updateRowCount()
 
 						if (showProgress) {
 							this.updateProgress(90, 'Rendering table...')
@@ -118,14 +131,20 @@ class CSVEditor {
 
 						setTimeout(
 							() => {
-								this.renderTable()
-								this.updateRowCount()
-								this.saveBtn.disabled = false
-								this.resetBtn.disabled = false
+								try {
+									this.renderTable()
+									this.saveBtn.disabled = false
+									this.resetBtn.disabled = false
 
-								if (showProgress) {
-									this.updateProgress(100, 'Complete!')
-									setTimeout(() => this.hideProgress(), 500)
+									if (showProgress) {
+										this.updateProgress(100, 'Complete!')
+										setTimeout(() => this.hideProgress(), 500)
+									}
+								} catch (error) {
+									if (showProgress) {
+										this.hideProgress()
+									}
+									alert('Error rendering table: ' + error.message)
 								}
 							},
 							showProgress ? 200 : 0
@@ -160,6 +179,89 @@ class CSVEditor {
 		})
 	}
 
+	handleFileWithFileReader(file, showProgress) {
+		if (showProgress) {
+			this.updateProgress(30, 'Reading file with FileReader...')
+		}
+
+		const reader = new FileReader()
+		
+		reader.onload = (e) => {
+			try {
+				if (showProgress) {
+					this.updateProgress(60, 'Parsing CSV content...')
+				}
+
+				// Parse the text content with Papa Parse
+				const result = Papa.parse(e.target.result, {
+					header: false,
+					skipEmptyLines: false
+				})
+				
+				if (showProgress) {
+					this.updateProgress(70, 'Processing CSV data...')
+				}
+
+				// Process the data the same way as the original method
+				setTimeout(() => {
+					this.csvData = result.data
+
+					// Remove empty rows at the end
+					while (
+						this.csvData.length > 0 &&
+						this.csvData[this.csvData.length - 1].every((cell) => cell === '')
+					) {
+						this.csvData.pop()
+					}
+
+					// Store original data for reset functionality
+					this.originalCsvData = JSON.parse(JSON.stringify(this.csvData))
+					
+					// Update row count immediately after data processing
+					this.updateRowCount()
+
+					if (showProgress) {
+						this.updateProgress(90, 'Rendering table...')
+					}
+
+					setTimeout(() => {
+						try {
+							this.renderTable()
+							this.saveBtn.disabled = false
+							this.resetBtn.disabled = false
+
+							if (showProgress) {
+								this.updateProgress(100, 'Complete!')
+								setTimeout(() => this.hideProgress(), 500)
+							}
+						} catch (error) {
+							if (showProgress) {
+								this.hideProgress()
+							}
+							alert('Error rendering table: ' + error.message)
+						}
+					}, showProgress ? 200 : 0)
+				}, showProgress ? 300 : 0)
+
+			} catch (error) {
+				if (showProgress) {
+					this.hideProgress()
+				}
+				alert('Error reading file: ' + error.message)
+			}
+		}
+
+		reader.onerror = (error) => {
+			if (showProgress) {
+				this.hideProgress()
+			}
+			alert('Error reading file: ' + error.message)
+		}
+
+		// Read the file as text
+		reader.readAsText(file)
+	}
+
 	renderTable() {
 		if (this.csvData.length === 0) {
 			this.tableContainer.innerHTML =
@@ -185,7 +287,6 @@ class CSVEditor {
 			this.csvData[0].forEach((header, index) => {
 				const th = document.createElement('th')
 				th.textContent = header || `Column ${index + 1}`
-				th.title = th.textContent
 				headerRow.appendChild(th)
 			})
 		}
@@ -215,7 +316,6 @@ class CSVEditor {
 				cell.textContent = rowData[j] || ''
 				cell.dataset.row = i
 				cell.dataset.col = j
-				cell.title = cell.textContent
 
 				// Check if this cell was previously edited
 				const cellKey = `${i}:${j}`
@@ -258,7 +358,6 @@ class CSVEditor {
 				const newValue = input.value
 				cell.classList.remove('editing')
 				cell.textContent = newValue
-				cell.title = newValue
 
 				// Update data
 				const row = parseInt(cell.dataset.row)
@@ -312,7 +411,6 @@ class CSVEditor {
 				} else if (e.key === 'Escape') {
 					cell.classList.remove('editing')
 					cell.textContent = originalValue
-					cell.title = originalValue
 				}
 			})
 		})
