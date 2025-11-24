@@ -5,9 +5,13 @@ class CSVEditor {
 		this.fileName = ''
 		this.isEdited = false
 		this.editedCells = new Set() // Track edited cells by row:col coordinates
+		this.saveDebounceTimer = null // Timer for debounced localStorage saves
 
 		this.initializeElements()
 		this.bindEvents()
+		
+		// Load previously saved data from localStorage
+		this.loadFromLocalStorage()
 	}
 
 	initializeElements() {
@@ -71,6 +75,9 @@ class CSVEditor {
 	handleFileUpload(event) {
 		const file = event.target.files[0]
 		if (!file) return
+
+		// Clear previous data from localStorage before processing new file
+		this.clearLocalStorage()
 
 		this.fileName = file.name
 		this.fileNameSpan.textContent = this.fileName
@@ -140,6 +147,11 @@ class CSVEditor {
 										this.updateProgress(100, 'Complete!')
 										setTimeout(() => this.hideProgress(), 500)
 									}
+
+									// Save to localStorage asynchronously after rendering
+									setTimeout(() => {
+										this.saveToLocalStorage()
+									}, 100)
 								} catch (error) {
 									if (showProgress) {
 										this.hideProgress()
@@ -234,6 +246,11 @@ class CSVEditor {
 								this.updateProgress(100, 'Complete!')
 								setTimeout(() => this.hideProgress(), 500)
 							}
+
+							// Save to localStorage asynchronously after rendering
+							setTimeout(() => {
+								this.saveToLocalStorage()
+							}, 100)
 						} catch (error) {
 							if (showProgress) {
 								this.hideProgress()
@@ -402,6 +419,9 @@ class CSVEditor {
 
 				// Update save button state
 				this.updateSaveButtonState()
+
+				// Save to localStorage after editing (debounced)
+				this.saveToLocalStorageDebounced()
 			}
 
 			input.addEventListener('blur', finishEditing)
@@ -458,6 +478,11 @@ class CSVEditor {
 		// Re-render table and update UI
 		this.renderTable()
 		this.updateSaveButtonState()
+
+		// Update localStorage with reset data
+		setTimeout(() => {
+			this.saveToLocalStorage()
+		}, 100)
 	}
 
 	saveCSV() {
@@ -531,6 +556,109 @@ class CSVEditor {
 			},
 			showProgress ? 100 : 0
 		)
+	}
+
+	// localStorage management methods
+	saveToLocalStorage() {
+		try {
+			const dataToStore = {
+				csvData: this.csvData,
+				originalCsvData: this.originalCsvData,
+				fileName: this.fileName,
+				editedCells: Array.from(this.editedCells) // Convert Set to Array for JSON serialization
+			}
+
+			localStorage.setItem('csvEditorData', JSON.stringify(dataToStore))
+			this.showStorageNotification('Data saved for next session', 'success')
+		} catch (error) {
+			// Handle QuotaExceededError or other localStorage errors
+			if (error.name === 'QuotaExceededError') {
+				console.warn('CSV file too large to persist in localStorage')
+				this.showStorageNotification('File too large to persist', 'warning')
+			} else {
+				console.error('Error saving to localStorage:', error)
+				this.showStorageNotification('Failed to save data', 'error')
+			}
+		}
+	}
+
+	saveToLocalStorageDebounced() {
+		// Clear existing timer
+		if (this.saveDebounceTimer) {
+			clearTimeout(this.saveDebounceTimer)
+		}
+
+		// Set new timer to save after 1 second of no changes
+		this.saveDebounceTimer = setTimeout(() => {
+			this.saveToLocalStorage()
+		}, 1000)
+	}
+
+	loadFromLocalStorage() {
+		try {
+			const storedData = localStorage.getItem('csvEditorData')
+			
+			if (!storedData) {
+				return false
+			}
+
+			const data = JSON.parse(storedData)
+			
+			// Restore data
+			this.csvData = data.csvData || []
+			this.originalCsvData = data.originalCsvData || []
+			this.fileName = data.fileName || ''
+			this.editedCells = new Set(data.editedCells || [])
+			this.isEdited = this.editedCells.size > 0
+
+			// Update UI
+			if (this.csvData.length > 0) {
+				this.fileNameSpan.textContent = this.fileName
+				this.updateRowCount()
+				this.renderTable()
+				this.saveBtn.disabled = false
+				this.resetBtn.disabled = !this.isEdited
+				this.updateSaveButtonState()
+				return true
+			}
+
+			return false
+		} catch (error) {
+			console.error('Error loading from localStorage:', error)
+			// Clear corrupted data
+			localStorage.removeItem('csvEditorData')
+			return false
+		}
+	}
+
+	clearLocalStorage() {
+		try {
+			localStorage.removeItem('csvEditorData')
+		} catch (error) {
+			console.error('Error clearing localStorage:', error)
+		}
+	}
+
+	showStorageNotification(message, type = 'success') {
+		// Create notification element if it doesn't exist
+		let notification = document.getElementById('storageNotification')
+		
+		if (!notification) {
+			notification = document.createElement('div')
+			notification.id = 'storageNotification'
+			notification.className = 'storage-notification'
+			document.body.appendChild(notification)
+		}
+
+		// Set message and type
+		notification.textContent = message
+		notification.className = `storage-notification ${type}`
+		notification.classList.add('show')
+
+		// Auto-hide after 3 seconds
+		setTimeout(() => {
+			notification.classList.remove('show')
+		}, 3000)
 	}
 }
 

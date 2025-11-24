@@ -399,3 +399,40 @@ body {
 .table-container::-webkit-scrollbar-thumb:hover {
 	background: #a1a1a1;
 }
+
+/* Storage notification */
+.storage-notification {
+	position: fixed;
+	bottom: 20px;
+	right: 20px;
+	padding: 12px 20px;
+	border-radius: 6px;
+	font-size: 13px;
+	font-weight: 500;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+	z-index: 3000;
+	opacity: 0;
+	transform: translateY(20px);
+	transition: opacity 0.3s ease, transform 0.3s ease;
+	pointer-events: none;
+}
+
+.storage-notification.show {
+	opacity: 1;
+	transform: translateY(0);
+}
+
+.storage-notification.success {
+	background: #10b981;
+	color: white;
+}
+
+.storage-notification.warning {
+	background: #f59e0b;
+	color: white;
+}
+
+.storage-notification.error {
+	background: #ef4444;
+	color: white;
+}
