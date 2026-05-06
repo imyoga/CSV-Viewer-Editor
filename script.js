@@ -1,17 +1,35 @@
+// Virtual scroll: render only visible rows for tables with many rows
+const VIRTUAL_SCROLL_THRESHOLD = 2000 // rows
+const ROW_HEIGHT = 28                 // px — must match CSS td height
+const OVERSCAN = 30                   // extra rows above/below viewport
+const MULTI_WORKER_MIN_SIZE = 5 * 1024 * 1024 // 5 MB threshold for parallel parsing
+
+function escapeHTML(val) {
+	const s = val == null ? '' : String(val)
+	// Fast path: most cells contain no special chars
+	if (!/[&<>]/.test(s)) return s
+	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 class CSVEditor {
 	constructor() {
 		this.csvData = []
-		this.originalCsvData = [] // Store original data for reset functionality
+		this.originalCsvData = []
 		this.fileName = ''
 		this.isEdited = false
-		this.editedCells = new Set() // Track edited cells by row:col coordinates
-		this.saveDebounceTimer = null // Timer for debounced localStorage saves
+		this.editedCells = new Set()
+
+		// Virtual scroll state
+		this._tbody = null
+		this._numCols = 0
+		this._vsEnabled = false
+		this._vsStart = 0
+		this._vsEnd = 0
+		this._vsScrollHandler = null
+		this._vsRafPending = false
 
 		this.initializeElements()
 		this.bindEvents()
-		
-		// Load previously saved data from localStorage
-		this.loadFromLocalStorage()
 	}
 
 	initializeElements() {
@@ -21,34 +39,57 @@ class CSVEditor {
 		this.tableContainer = document.getElementById('tableContainer')
 		this.fileNameSpan = document.getElementById('fileName')
 		this.rowCountSpan = document.getElementById('rowCount')
-
-		// Progress elements
 		this.progressOverlay = document.getElementById('progressOverlay')
 		this.progressText = document.getElementById('progressText')
 		this.progressPercent = document.getElementById('progressPercent')
 		this.progressFill = document.getElementById('progressFill')
 		this.progressDetails = document.getElementById('progressDetails')
-		
 	}
 
 	bindEvents() {
-		this.fileInput.addEventListener('change', (e) => this.handleFileUpload(e))
+		this.fileInput.addEventListener('change', (e) => {
+			const file = e.target.files[0]
+			if (file) this.processFile(file)
+		})
 		this.saveBtn.addEventListener('click', () => this.saveCSV())
 		this.resetBtn.addEventListener('click', () => this.resetChanges())
 
-		// Handle keyboard shortcuts
 		document.addEventListener('keydown', (e) => {
 			if (e.ctrlKey && e.key === 's') {
 				e.preventDefault()
-				if (!this.saveBtn.disabled) {
-					this.saveCSV()
-				}
+				if (!this.saveBtn.disabled) this.saveCSV()
 			} else if (e.ctrlKey && e.key === 'r') {
 				e.preventDefault()
-				if (!this.resetBtn.disabled) {
-					this.resetChanges()
-				}
+				if (!this.resetBtn.disabled) this.resetChanges()
 			}
+		})
+
+		this._setupDragDrop()
+	}
+
+	_setupDragDrop() {
+		document.addEventListener('dragover', (e) => {
+			e.preventDefault()
+			document.body.classList.add('drag-over')
+		})
+
+		document.addEventListener('dragleave', (e) => {
+			// Only remove the class when leaving the window entirely
+			if (e.relatedTarget === null) {
+				document.body.classList.remove('drag-over')
+			}
+		})
+
+		document.addEventListener('drop', (e) => {
+			e.preventDefault()
+			document.body.classList.remove('drag-over')
+			const file = e.dataTransfer.files[0]
+			if (!file) return
+			if (!file.name.toLowerCase().endsWith('.csv')) {
+				alert('Please drop a CSV file (.csv)')
+				return
+			}
+			this.processFile(file)
 		})
 	}
 
@@ -63,476 +104,480 @@ class CSVEditor {
 	updateProgress(percent, details = '') {
 		this.progressPercent.textContent = `${Math.round(percent)}%`
 		this.progressFill.style.width = `${percent}%`
-		if (details) {
-			this.progressDetails.textContent = details
-		}
+		if (details) this.progressDetails.textContent = details
 	}
 
 	hideProgress() {
 		this.progressOverlay.classList.add('hidden')
 	}
 
-	handleFileUpload(event) {
-		const file = event.target.files[0]
-		if (!file) return
+	// ── UPLOAD & PARSE ───────────────────────────────────────────────────────
 
-		// Clear previous data from localStorage before processing new file
-		this.clearLocalStorage()
-
+	async processFile(file) {
 		this.fileName = file.name
 		this.fileNameSpan.textContent = this.fileName
-		
-		// Clear edited cells state for new file
 		this.editedCells.clear()
 		this.isEdited = false
 		this.resetBtn.disabled = true
-		
-		// Clear previous row count and show loading state
 		this.rowCountSpan.textContent = 'Loading...'
 
-		// Show progress for large files (>1MB)
 		const showProgress = file.size > 1024 * 1024
 		if (showProgress) {
 			this.showProgress(
-				'Reading file...',
-				`Processing ${this.fileName} (${(file.size / 1024 / 1024).toFixed(
-					1
-				)}MB)`
+				'Parsing CSV...',
+				`${this.fileName} (${(file.size / 1024 / 1024).toFixed(1)} MB)`
 			)
 		}
 
-		Papa.parse(file, {
-			complete: (result) => {
-				// Check if Papa Parse failed to read the file
-				if (result.data.length === 0 && result.errors.length === 0) {
-					this.handleFileWithFileReader(file, showProgress)
-					return
-				}
-				
-				if (showProgress) {
-					this.updateProgress(70, 'Processing CSV data...')
-				}
+		try {
+			const data = await this.parseFile(file, showProgress)
 
-				// Simulate processing time for visual feedback
-				setTimeout(
-					() => {
-						this.csvData = result.data
+			if (showProgress) this.updateProgress(75, 'Processing data...')
 
-						// Remove empty rows at the end
-						while (
-							this.csvData.length > 0 &&
-							this.csvData[this.csvData.length - 1].every((cell) => cell === '')
-						) {
-							this.csvData.pop()
-						}
+			this.csvData = data
 
-						// Store original data for reset functionality
-						this.originalCsvData = JSON.parse(JSON.stringify(this.csvData))
-						
-						// Update row count immediately after data processing
-						this.updateRowCount()
+			// Strip trailing empty rows
+			while (
+				this.csvData.length > 0 &&
+				this.csvData[this.csvData.length - 1].every((c) => c === '')
+			) {
+				this.csvData.pop()
+			}
 
-						if (showProgress) {
-							this.updateProgress(90, 'Rendering table...')
-						}
+			this.originalCsvData = structuredClone(this.csvData)
+			this.updateRowCount()
 
-						setTimeout(
-							() => {
-								try {
-									this.renderTable()
-									this.saveBtn.disabled = false
-									this.resetBtn.disabled = false
+			if (showProgress) this.updateProgress(90, 'Rendering table...')
+			// Yield one frame so the progress bar can repaint
+			await new Promise((r) => requestAnimationFrame(r))
 
-									if (showProgress) {
-										this.updateProgress(100, 'Complete!')
-										setTimeout(() => this.hideProgress(), 500)
-									}
+			this.renderTable()
+			this.saveBtn.disabled = false
+			this.resetBtn.disabled = false
 
-									// Save to localStorage asynchronously after rendering
-									setTimeout(() => {
-										this.saveToLocalStorage()
-									}, 100)
-								} catch (error) {
-									if (showProgress) {
-										this.hideProgress()
-									}
-									alert('Error rendering table: ' + error.message)
-								}
-							},
-							showProgress ? 200 : 0
-						)
-					},
-					showProgress ? 300 : 0
+			if (showProgress) {
+				this.updateProgress(100, 'Done!')
+				setTimeout(() => this.hideProgress(), 500)
+			}
+		} catch (err) {
+			if (showProgress) this.hideProgress()
+			alert('Error processing CSV: ' + err.message)
+		}
+	}
+
+	async parseFile(file, showProgress) {
+		const numCores = navigator.hardwareConcurrency || 4
+
+		// Large files: try parallel multi-worker parsing across all CPU cores
+		if (file.size >= MULTI_WORKER_MIN_SIZE && numCores > 1) {
+			try {
+				return await this.parseWithMultipleWorkers(
+					file,
+					Math.min(numCores, 8),
+					showProgress
 				)
-			},
-			header: false,
-			skipEmptyLines: false,
-			step: showProgress
-				? (results, parser) => {
-						// Update progress during parsing for large files
-						if (results.meta && results.meta.cursor) {
-							const progress = Math.min(
-								(results.meta.cursor / file.size) * 60,
-								60
-							)
-							this.updateProgress(
-								progress,
-								`Reading file: ${Math.round(progress)}%`
-							)
-						}
-				  }
-				: undefined,
-			error: (error) => {
-				if (showProgress) {
-					this.hideProgress()
-				}
-				alert('Error parsing CSV: ' + error.message)
-			},
+			} catch (e) {
+				console.warn('Multi-worker parsing failed, falling back to single worker:', e)
+			}
+		}
+
+		// Smaller files or fallback: PapaParse worker:true moves parsing off main thread
+		return this.parseSingleWorker(file, showProgress)
+	}
+
+	parseSingleWorker(file, showProgress) {
+		return new Promise((resolve, reject) => {
+			Papa.parse(file, {
+				worker: true,
+				header: false,
+				skipEmptyLines: false,
+				complete: (result) => {
+					// PapaParse occasionally returns empty when run in worker mode on some files
+					if (result.data.length === 0 && !result.errors.length) {
+						this.parseViaFileReader(file).then(resolve).catch(reject)
+					} else {
+						resolve(result.data)
+					}
+				},
+				error: reject,
+				step: showProgress
+					? (results) => {
+							if (results.meta?.cursor) {
+								const pct = Math.min((results.meta.cursor / file.size) * 70, 70)
+								this.updateProgress(pct, `Parsing: ${Math.round(pct)}%`)
+							}
+					  }
+					: undefined,
+			})
 		})
 	}
 
-	handleFileWithFileReader(file, showProgress) {
-		if (showProgress) {
-			this.updateProgress(30, 'Reading file with FileReader...')
-		}
-
-		const reader = new FileReader()
-		
-		reader.onload = (e) => {
-			try {
-				if (showProgress) {
-					this.updateProgress(60, 'Parsing CSV content...')
+	parseViaFileReader(file) {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader()
+			reader.onload = (e) => {
+				try {
+					resolve(
+						Papa.parse(e.target.result, { header: false, skipEmptyLines: false }).data
+					)
+				} catch (err) {
+					reject(err)
 				}
-
-				// Parse the text content with Papa Parse
-				const result = Papa.parse(e.target.result, {
-					header: false,
-					skipEmptyLines: false
-				})
-				
-				if (showProgress) {
-					this.updateProgress(70, 'Processing CSV data...')
-				}
-
-				// Process the data the same way as the original method
-				setTimeout(() => {
-					this.csvData = result.data
-
-					// Remove empty rows at the end
-					while (
-						this.csvData.length > 0 &&
-						this.csvData[this.csvData.length - 1].every((cell) => cell === '')
-					) {
-						this.csvData.pop()
-					}
-
-					// Store original data for reset functionality
-					this.originalCsvData = JSON.parse(JSON.stringify(this.csvData))
-					
-					// Update row count immediately after data processing
-					this.updateRowCount()
-
-					if (showProgress) {
-						this.updateProgress(90, 'Rendering table...')
-					}
-
-					setTimeout(() => {
-						try {
-							this.renderTable()
-							this.saveBtn.disabled = false
-							this.resetBtn.disabled = false
-
-							if (showProgress) {
-								this.updateProgress(100, 'Complete!')
-								setTimeout(() => this.hideProgress(), 500)
-							}
-
-							// Save to localStorage asynchronously after rendering
-							setTimeout(() => {
-								this.saveToLocalStorage()
-							}, 100)
-						} catch (error) {
-							if (showProgress) {
-								this.hideProgress()
-							}
-							alert('Error rendering table: ' + error.message)
-						}
-					}, showProgress ? 200 : 0)
-				}, showProgress ? 300 : 0)
-
-			} catch (error) {
-				if (showProgress) {
-					this.hideProgress()
-				}
-				alert('Error reading file: ' + error.message)
 			}
-		}
-
-		reader.onerror = (error) => {
-			if (showProgress) {
-				this.hideProgress()
-			}
-			alert('Error reading file: ' + error.message)
-		}
-
-		// Read the file as text
-		reader.readAsText(file)
+			reader.onerror = () => reject(new Error('FileReader failed'))
+			reader.readAsText(file)
+		})
 	}
 
+	// Split file into N chunks aligned to newline byte boundaries, then parse in parallel
+	async parseWithMultipleWorkers(file, numWorkers, showProgress) {
+		if (showProgress)
+			this.updateProgress(10, `Splitting file across ${numWorkers} CPU cores...`)
+
+		const chunks = await this.splitFileAtNewlines(file, numWorkers)
+
+		if (showProgress)
+			this.updateProgress(20, `Parsing with ${chunks.length} workers in parallel...`)
+
+		// All chunks parse simultaneously — saturates all CPU cores
+		const results = await Promise.all(
+			chunks.map((blob, i) => this.runParserWorker(blob, i))
+		)
+
+		results.sort((a, b) => a.chunkIndex - b.chunkIndex)
+
+		const merged = []
+		for (const r of results) {
+			if (r.data) merged.push(...r.data)
+		}
+		return merged
+	}
+
+	// Find newline byte (0x0A) boundaries by reading small 2 KB windows — avoids
+	// loading the full file into memory just to find split points.
+	async splitFileAtNewlines(file, numParts) {
+		const targetSize = Math.ceil(file.size / numParts)
+		const chunks = []
+		let start = 0
+
+		for (let i = 0; i < numParts - 1; i++) {
+			if (start >= file.size) break
+
+			const rawEnd = Math.min(start + targetSize, file.size)
+			const winStart = Math.max(start, rawEnd - 1024)
+			const winEnd = Math.min(file.size, rawEnd + 1024)
+
+			const buf = await file.slice(winStart, winEnd).arrayBuffer()
+			const bytes = new Uint8Array(buf)
+
+			// Walk backward from the raw boundary to find a clean row end
+			const midOffset = rawEnd - winStart
+			let end = rawEnd
+			for (let j = midOffset; j >= 0; j--) {
+				if (bytes[j] === 0x0a) {
+					end = winStart + j + 1
+					break
+				}
+			}
+
+			chunks.push(file.slice(start, end))
+			start = end
+		}
+
+		if (start < file.size) chunks.push(file.slice(start))
+
+		return chunks
+	}
+
+	runParserWorker(blob, chunkIndex) {
+		return new Promise((resolve, reject) => {
+			const worker = new Worker('csv-parser.worker.js')
+
+			worker.onmessage = (e) => {
+				worker.terminate()
+				if (e.data.error) reject(new Error(e.data.error))
+				else resolve(e.data)
+			}
+
+			worker.onerror = (e) => {
+				worker.terminate()
+				reject(new Error(e.message || 'Worker error'))
+			}
+
+			worker.postMessage({ blob, chunkIndex })
+		})
+	}
+
+	// ── RENDER ───────────────────────────────────────────────────────────────
+
 	renderTable() {
+		// Tear down previous virtual scroll listener
+		if (this._vsScrollHandler) {
+			this.tableContainer.removeEventListener('scroll', this._vsScrollHandler)
+			this._vsScrollHandler = null
+		}
+
 		if (this.csvData.length === 0) {
 			this.tableContainer.innerHTML =
-				'<div class="placeholder"><p>Upload a CSV file to start editing</p></div>'
+				'<div class="placeholder"><p>Drop a CSV file here or click <strong>Upload CSV</strong></p></div>'
 			return
 		}
 
+		this._numCols = this.csvData[0]?.length || 0
+		const totalDataRows = this.csvData.length - 1
+		this._vsEnabled = totalDataRows > VIRTUAL_SCROLL_THRESHOLD
+
 		const table = document.createElement('table')
 		table.className = 'csv-table'
+		table.appendChild(this._buildThead())
 
-		// Create header
-		const thead = document.createElement('thead')
-		const headerRow = document.createElement('tr')
-
-		// Add row number header
-		const rowNumHeader = document.createElement('th')
-		rowNumHeader.textContent = '#'
-		rowNumHeader.className = 'row-number'
-		headerRow.appendChild(rowNumHeader)
-
-		// Add column headers
-		if (this.csvData[0]) {
-			this.csvData[0].forEach((header, index) => {
-				const th = document.createElement('th')
-				th.textContent = header || `Column ${index + 1}`
-				headerRow.appendChild(th)
-			})
-		}
-
-		thead.appendChild(headerRow)
-		table.appendChild(thead)
-
-		// Create body
 		const tbody = document.createElement('tbody')
-
-		// Add data rows (skip header row)
-		for (let i = 1; i < this.csvData.length; i++) {
-			const row = document.createElement('tr')
-
-			// Add row number
-			const rowNumCell = document.createElement('td')
-			rowNumCell.textContent = i
-			rowNumCell.className = 'row-number'
-			row.appendChild(rowNumCell)
-
-			// Add data cells
-			const rowData = this.csvData[i]
-			const maxCols = this.csvData[0] ? this.csvData[0].length : rowData.length
-
-			for (let j = 0; j < maxCols; j++) {
-				const cell = document.createElement('td')
-				cell.textContent = rowData[j] || ''
-				cell.dataset.row = i
-				cell.dataset.col = j
-
-				// Check if this cell was previously edited
-				const cellKey = `${i}:${j}`
-				if (this.editedCells.has(cellKey)) {
-					cell.classList.add('edited')
-				}
-
-				// Make cell editable
-				this.makeCellEditable(cell)
-
-				row.appendChild(cell)
-			}
-
-			tbody.appendChild(row)
-		}
-
+		this._tbody = tbody
 		table.appendChild(tbody)
+
 		this.tableContainer.innerHTML = ''
 		this.tableContainer.appendChild(table)
+
+		// Single delegated listener covers all current and future cells
+		this._setupTableDelegation(tbody)
+
+		if (this._vsEnabled) {
+			const viewHeight = this.tableContainer.clientHeight || 600
+			const viewRows = Math.ceil(viewHeight / ROW_HEIGHT)
+			this._vsStart = 0
+			this._vsEnd = Math.min(totalDataRows, viewRows + OVERSCAN * 2)
+			this._renderVirtualRows()
+			this._setupVirtualScroll()
+		} else {
+			// Batch-build HTML string, then set once — single layout reflow
+			tbody.innerHTML = this._buildRowsHTML(1, totalDataRows)
+		}
 	}
 
-	makeCellEditable(cell) {
-		cell.addEventListener('dblclick', () => {
-			if (cell.classList.contains('editing')) return
+	_buildThead() {
+		const thead = document.createElement('thead')
+		const tr = document.createElement('tr')
 
-			const originalValue = cell.textContent
-			cell.classList.add('editing')
+		const thNum = document.createElement('th')
+		thNum.textContent = '#'
+		thNum.className = 'row-number'
+		tr.appendChild(thNum)
 
-			const input = document.createElement('input')
-			input.type = 'text'
-			input.value = originalValue
+		;(this.csvData[0] || []).forEach((header, i) => {
+			const th = document.createElement('th')
+			th.textContent = header || `Column ${i + 1}`
+			tr.appendChild(th)
+		})
 
-			cell.innerHTML = ''
-			cell.appendChild(input)
+		thead.appendChild(tr)
+		return thead
+	}
 
-			input.focus()
-			input.select()
+	_buildRowsHTML(from, to) {
+		// Pre-allocate array to avoid repeated string concat
+		const parts = new Array(to - from + 1)
+		for (let i = from; i <= to; i++) {
+			parts[i - from] = this._buildRowHTML(i)
+		}
+		return parts.join('')
+	}
 
-			const finishEditing = () => {
-				const newValue = input.value
+	_buildRowHTML(rowIndex) {
+		const row = this.csvData[rowIndex]
+		const numCols = this._numCols
+		// Use data-index parity for stable alternating colors under virtual scroll
+		const parity = rowIndex % 2 === 0 ? 'row-even' : 'row-odd'
+		let html = `<tr class="${parity}"><td class="row-number">${rowIndex}</td>`
+
+		for (let j = 0; j < numCols; j++) {
+			const val = escapeHTML(row?.[j] ?? '')
+			const cls = this.editedCells.has(`${rowIndex}:${j}`) ? ' class="edited"' : ''
+			html += `<td${cls} data-row="${rowIndex}" data-col="${j}">${val}</td>`
+		}
+
+		return html + '</tr>'
+	}
+
+	// ── VIRTUAL SCROLL ───────────────────────────────────────────────────────
+
+	_setupVirtualScroll() {
+		this._vsScrollHandler = () => {
+			// Throttle to one update per animation frame
+			if (this._vsRafPending) return
+			this._vsRafPending = true
+			requestAnimationFrame(() => {
+				this._vsRafPending = false
+				// Don't destroy a cell that's being edited
+				if (this._tbody?.querySelector('.editing')) return
+
+				const scrollTop = this.tableContainer.scrollTop
+				const height = this.tableContainer.clientHeight
+				const totalRows = this.csvData.length - 1
+
+				const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN)
+				const end = Math.min(
+					totalRows,
+					Math.ceil((scrollTop + height) / ROW_HEIGHT) + OVERSCAN
+				)
+
+				if (start !== this._vsStart || end !== this._vsEnd) {
+					this._vsStart = start
+					this._vsEnd = end
+					this._renderVirtualRows()
+				}
+			})
+		}
+		this.tableContainer.addEventListener('scroll', this._vsScrollHandler)
+	}
+
+	_renderVirtualRows() {
+		if (!this._tbody) return
+
+		const totalRows = this.csvData.length - 1
+		const colSpan = this._numCols + 1
+		const topH = this._vsStart * ROW_HEIGHT
+		const botH = Math.max(0, (totalRows - this._vsEnd) * ROW_HEIGHT)
+
+		let html = ''
+		if (topH > 0) {
+			html += `<tr class="vs-spacer"><td style="height:${topH}px;padding:0;border:none;" colspan="${colSpan}"></td></tr>`
+		}
+		html += this._buildRowsHTML(this._vsStart + 1, this._vsEnd)
+		if (botH > 0) {
+			html += `<tr class="vs-spacer"><td style="height:${botH}px;padding:0;border:none;" colspan="${colSpan}"></td></tr>`
+		}
+
+		this._tbody.innerHTML = html
+	}
+
+	// ── EVENT DELEGATION ─────────────────────────────────────────────────────
+
+	_setupTableDelegation(tbody) {
+		tbody.addEventListener('dblclick', (e) => {
+			const cell = e.target.closest('td[data-row]')
+			if (cell) this._startCellEdit(cell)
+		})
+
+		tbody.addEventListener('click', (e) => {
+			const cell = e.target.closest('td[data-row]')
+			if (!cell) return
+			// Clear previous selection cheaply — only one cell can be selected at a time
+			this.tableContainer.querySelector('td.selected')?.classList.remove('selected')
+			cell.classList.add('selected')
+		})
+	}
+
+	_startCellEdit(cell) {
+		if (cell.classList.contains('editing')) return
+
+		const originalText = cell.textContent
+		cell.classList.add('editing')
+
+		const input = document.createElement('input')
+		input.type = 'text'
+		input.value = originalText
+		cell.innerHTML = ''
+		cell.appendChild(input)
+		input.focus()
+		input.select()
+
+		const rowIdx = parseInt(cell.dataset.row)
+		const colIdx = parseInt(cell.dataset.col)
+
+		let finished = false
+		const finish = () => {
+			if (finished) return
+			finished = true
+			const newValue = input.value
+			cell.classList.remove('editing')
+			cell.textContent = newValue
+
+			if (!this.csvData[rowIdx]) this.csvData[rowIdx] = []
+			while (this.csvData[rowIdx].length <= colIdx) this.csvData[rowIdx].push('')
+			this.csvData[rowIdx][colIdx] = newValue
+
+			const origVal = this.originalCsvData[rowIdx]?.[colIdx] ?? ''
+			const key = `${rowIdx}:${colIdx}`
+
+			if (newValue !== origVal) {
+				this.editedCells.add(key)
+				cell.classList.add('edited')
+				this.isEdited = true
+			} else {
+				this.editedCells.delete(key)
+				cell.classList.remove('edited')
+				this.isEdited = this.editedCells.size > 0
+			}
+
+			this.updateSaveButtonState()
+		}
+
+		input.addEventListener('blur', finish)
+		input.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter') finish()
+			else if (e.key === 'Escape') {
 				cell.classList.remove('editing')
-				cell.textContent = newValue
-
-				// Update data
-				const row = parseInt(cell.dataset.row)
-				const col = parseInt(cell.dataset.col)
-
-				// Ensure the row exists in csvData
-				while (this.csvData.length <= row) {
-					this.csvData.push([])
-				}
-
-				// Ensure the column exists in the row
-				while (this.csvData[row].length <= col) {
-					this.csvData[row].push('')
-				}
-
-				this.csvData[row][col] = newValue
-
-				// Get the original value from originalCsvData for comparison
-				let originalValue = ''
-				if (this.originalCsvData[row] && this.originalCsvData[row][col] !== undefined) {
-					originalValue = this.originalCsvData[row][col]
-				}
-
-				const cellKey = `${row}:${col}`
-				
-				// Only mark as edited if the value actually changed from the original
-				if (newValue !== originalValue) {
-					// Track edited cell
-					this.editedCells.add(cellKey)
-					// Add edited class to cell for highlighting
-					cell.classList.add('edited')
-					this.isEdited = true
-				} else {
-					// Value was reverted back to original, remove from edited cells
-					this.editedCells.delete(cellKey)
-					// Remove edited class from cell
-					cell.classList.remove('edited')
-					
-					// Check if there are any other edited cells to determine isEdited state
-					this.isEdited = this.editedCells.size > 0
-				}
-
-				// Update save button state
-				this.updateSaveButtonState()
-
-				// Save to localStorage after editing (debounced)
-				this.saveToLocalStorageDebounced()
-			}
-
-			input.addEventListener('blur', finishEditing)
-			input.addEventListener('keydown', (e) => {
-				if (e.key === 'Enter') {
-					finishEditing()
-				} else if (e.key === 'Escape') {
-					cell.classList.remove('editing')
-					cell.textContent = originalValue
-				}
-			})
-		})
-
-		// Single click to select cell
-		cell.addEventListener('click', () => {
-			// Remove selection from other cells
-			document.querySelectorAll('.csv-table td.selected').forEach((c) => {
-				c.classList.remove('selected')
-			})
-
-			if (!cell.classList.contains('row-number')) {
-				cell.classList.add('selected')
+				cell.textContent = originalText
 			}
 		})
 	}
+
+	// ── DATA OPS ─────────────────────────────────────────────────────────────
 
 	updateRowCount() {
 		const dataRows = this.csvData.length > 0 ? this.csvData.length - 1 : 0
-		const cols = this.csvData[0] ? this.csvData[0].length : 0
+		const cols = this.csvData[0]?.length || 0
 		this.rowCountSpan.textContent = `${dataRows} rows × ${cols} columns`
 	}
 
 	updateSaveButtonState() {
 		this.saveBtn.textContent = this.isEdited ? 'Save CSV *' : 'Save CSV'
-		// Enable/disable reset button based on whether there are changes
 		this.resetBtn.disabled = !this.isEdited || this.csvData.length === 0
 	}
 
 	resetChanges() {
 		if (!this.isEdited || this.originalCsvData.length === 0) return
+		if (!confirm('Reset all changes? This cannot be undone.')) return
 
-		// Show confirmation dialog
-		if (!confirm('Are you sure you want to reset all changes? This action cannot be undone.')) {
-			return
-		}
-
-		// Reset data to original
-		this.csvData = JSON.parse(JSON.stringify(this.originalCsvData))
-		
-		// Clear edited cells tracking
+		this.csvData = structuredClone(this.originalCsvData)
 		this.editedCells.clear()
 		this.isEdited = false
-
-		// Re-render table and update UI
 		this.renderTable()
 		this.updateSaveButtonState()
-
-		// Update localStorage with reset data
-		setTimeout(() => {
-			this.saveToLocalStorage()
-		}, 100)
 	}
 
 	saveCSV() {
 		if (this.csvData.length === 0) return
 
-		// Show progress for large datasets (>10k rows or estimated size >1MB)
-		const estimatedSize =
-			this.csvData.length * (this.csvData[0]?.length || 0) * 10 // rough estimate
+		const estimatedSize = this.csvData.length * (this.csvData[0]?.length || 0) * 10
 		const showProgress =
 			this.csvData.length > 10000 || estimatedSize > 1024 * 1024
 
 		if (showProgress) {
-			this.showProgress(
-				'Generating CSV...',
-				`Processing ${this.csvData.length} rows`
-			)
+			this.showProgress('Generating CSV...', `Processing ${this.csvData.length} rows`)
 			this.saveBtn.classList.add('loading')
 		}
 
-		// Use setTimeout to allow UI to update
 		setTimeout(
 			() => {
 				try {
-					if (showProgress) {
-						this.updateProgress(30, 'Converting data to CSV format...')
-					}
-
+					if (showProgress) this.updateProgress(30, 'Converting to CSV format...')
 					const csv = Papa.unparse(this.csvData)
 
-					if (showProgress) {
-						this.updateProgress(70, 'Creating download file...')
-					}
-
+					if (showProgress) this.updateProgress(70, 'Creating download file...')
 					const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
 
-					// Use original filename or default
 					const filename = this.fileName || 'edited_data.csv'
 					const finalFilename =
 						this.isEdited && !filename.includes('_edited')
 							? filename.replace('.csv', '_edited.csv')
 							: filename
 
-					if (showProgress) {
-						this.updateProgress(90, 'Preparing download...')
-					}
+					if (showProgress) this.updateProgress(90, 'Preparing download...')
 
 					setTimeout(
 						() => {
 							saveAs(blob, finalFilename)
-
 							this.isEdited = false
 							this.updateSaveButtonState()
 
@@ -558,111 +603,8 @@ class CSVEditor {
 		)
 	}
 
-	// localStorage management methods
-	saveToLocalStorage() {
-		try {
-			const dataToStore = {
-				csvData: this.csvData,
-				originalCsvData: this.originalCsvData,
-				fileName: this.fileName,
-				editedCells: Array.from(this.editedCells) // Convert Set to Array for JSON serialization
-			}
-
-			localStorage.setItem('csvEditorData', JSON.stringify(dataToStore))
-			this.showStorageNotification('Data saved for next session', 'success')
-		} catch (error) {
-			// Handle QuotaExceededError or other localStorage errors
-			if (error.name === 'QuotaExceededError') {
-				console.warn('CSV file too large to persist in localStorage')
-				this.showStorageNotification('File too large to persist', 'warning')
-			} else {
-				console.error('Error saving to localStorage:', error)
-				this.showStorageNotification('Failed to save data', 'error')
-			}
-		}
-	}
-
-	saveToLocalStorageDebounced() {
-		// Clear existing timer
-		if (this.saveDebounceTimer) {
-			clearTimeout(this.saveDebounceTimer)
-		}
-
-		// Set new timer to save after 1 second of no changes
-		this.saveDebounceTimer = setTimeout(() => {
-			this.saveToLocalStorage()
-		}, 1000)
-	}
-
-	loadFromLocalStorage() {
-		try {
-			const storedData = localStorage.getItem('csvEditorData')
-			
-			if (!storedData) {
-				return false
-			}
-
-			const data = JSON.parse(storedData)
-			
-			// Restore data
-			this.csvData = data.csvData || []
-			this.originalCsvData = data.originalCsvData || []
-			this.fileName = data.fileName || ''
-			this.editedCells = new Set(data.editedCells || [])
-			this.isEdited = this.editedCells.size > 0
-
-			// Update UI
-			if (this.csvData.length > 0) {
-				this.fileNameSpan.textContent = this.fileName
-				this.updateRowCount()
-				this.renderTable()
-				this.saveBtn.disabled = false
-				this.resetBtn.disabled = !this.isEdited
-				this.updateSaveButtonState()
-				return true
-			}
-
-			return false
-		} catch (error) {
-			console.error('Error loading from localStorage:', error)
-			// Clear corrupted data
-			localStorage.removeItem('csvEditorData')
-			return false
-		}
-	}
-
-	clearLocalStorage() {
-		try {
-			localStorage.removeItem('csvEditorData')
-		} catch (error) {
-			console.error('Error clearing localStorage:', error)
-		}
-	}
-
-	showStorageNotification(message, type = 'success') {
-		// Create notification element if it doesn't exist
-		let notification = document.getElementById('storageNotification')
-		
-		if (!notification) {
-			notification = document.createElement('div')
-			notification.id = 'storageNotification'
-			notification.className = 'storage-notification'
-			document.body.appendChild(notification)
-		}
-
-		// Set message and type
-		notification.textContent = message
-		notification.className = `storage-notification ${type}`
-		notification.classList.add('show')
-
-		// Auto-hide after 3 seconds
-		setTimeout(() => {
-			notification.classList.remove('show')
-		}, 3000)
-	}
 }
 
-// Initialize the CSV editor when the page loads
 document.addEventListener('DOMContentLoaded', () => {
 	new CSVEditor()
 })
