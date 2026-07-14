@@ -34,6 +34,7 @@ class CSVEditor {
 
 	initializeElements() {
 		this.fileInput = document.getElementById('csvFile')
+		this.pasteBtn = document.getElementById('pasteBtn')
 		this.saveBtn = document.getElementById('saveBtn')
 		this.resetBtn = document.getElementById('resetBtn')
 		this.tableContainer = document.getElementById('tableContainer')
@@ -44,6 +45,11 @@ class CSVEditor {
 		this.progressPercent = document.getElementById('progressPercent')
 		this.progressFill = document.getElementById('progressFill')
 		this.progressDetails = document.getElementById('progressDetails')
+		this.pasteOverlay = document.getElementById('pasteOverlay')
+		this.pasteTextarea = document.getElementById('pasteTextarea')
+		this.pasteLoadBtn = document.getElementById('pasteLoadBtn')
+		this.pasteCancelBtn = document.getElementById('pasteCancelBtn')
+		this.pasteCloseBtn = document.getElementById('pasteCloseBtn')
 	}
 
 	bindEvents() {
@@ -51,10 +57,21 @@ class CSVEditor {
 			const file = e.target.files[0]
 			if (file) this.processFile(file)
 		})
+		this.pasteBtn.addEventListener('click', () => this.openPasteModal())
+		this.pasteLoadBtn.addEventListener('click', () => this.loadPastedCSV())
+		this.pasteCancelBtn.addEventListener('click', () => this.closePasteModal())
+		this.pasteCloseBtn.addEventListener('click', () => this.closePasteModal())
+		this.pasteOverlay.addEventListener('click', (e) => {
+			if (e.target === this.pasteOverlay) this.closePasteModal()
+		})
 		this.saveBtn.addEventListener('click', () => this.saveCSV())
 		this.resetBtn.addEventListener('click', () => this.resetChanges())
 
 		document.addEventListener('keydown', (e) => {
+			if (e.key === 'Escape' && !this.pasteOverlay.classList.contains('hidden')) {
+				this.closePasteModal()
+				return
+			}
 			if (e.ctrlKey && e.key === 's') {
 				e.preventDefault()
 				if (!this.saveBtn.disabled) this.saveCSV()
@@ -65,6 +82,17 @@ class CSVEditor {
 		})
 
 		this._setupDragDrop()
+		this._setupPlaceholderActions()
+	}
+
+	_setupPlaceholderActions() {
+		this.tableContainer.addEventListener('click', (e) => {
+			const link = e.target.closest('.placeholder-link')
+			if (!link) return
+			const action = link.dataset.action
+			if (action === 'upload') this.fileInput.click()
+			else if (action === 'paste') this.openPasteModal()
+		})
 	}
 
 	_setupDragDrop() {
@@ -113,6 +141,27 @@ class CSVEditor {
 
 	// ── UPLOAD & PARSE ───────────────────────────────────────────────────────
 
+	openPasteModal() {
+		this.pasteOverlay.classList.remove('hidden')
+		this.pasteTextarea.value = ''
+		this.pasteTextarea.focus()
+	}
+
+	closePasteModal() {
+		this.pasteOverlay.classList.add('hidden')
+	}
+
+	async loadPastedCSV() {
+		const text = this.pasteTextarea.value.trim()
+		if (!text) {
+			alert('Please paste some CSV content first.')
+			return
+		}
+
+		this.closePasteModal()
+		await this.processCSVText(text, 'pasted_data.csv')
+	}
+
 	async processFile(file) {
 		this.fileName = file.name
 		this.fileNameSpan.textContent = this.fileName
@@ -131,37 +180,89 @@ class CSVEditor {
 
 		try {
 			const data = await this.parseFile(file, showProgress)
-
-			if (showProgress) this.updateProgress(75, 'Processing data...')
-
-			this.csvData = data
-
-			// Strip trailing empty rows
-			while (
-				this.csvData.length > 0 &&
-				this.csvData[this.csvData.length - 1].every((c) => c === '')
-			) {
-				this.csvData.pop()
-			}
-
-			this.originalCsvData = structuredClone(this.csvData)
-			this.updateRowCount()
-
-			if (showProgress) this.updateProgress(90, 'Rendering table...')
-			// Yield one frame so the progress bar can repaint
-			await new Promise((r) => requestAnimationFrame(r))
-
-			this.renderTable()
-			this.saveBtn.disabled = false
-			this.resetBtn.disabled = false
-
-			if (showProgress) {
-				this.updateProgress(100, 'Done!')
-				setTimeout(() => this.hideProgress(), 500)
-			}
+			await this.applyParsedData(data, showProgress)
 		} catch (err) {
 			if (showProgress) this.hideProgress()
 			alert('Error processing CSV: ' + err.message)
+		}
+	}
+
+	async processCSVText(text, fileName = 'pasted_data.csv') {
+		this.fileName = fileName
+		this.fileNameSpan.textContent = this.fileName
+		this.editedCells.clear()
+		this.isEdited = false
+		this.resetBtn.disabled = true
+		this.rowCountSpan.textContent = 'Loading...'
+
+		const showProgress = text.length > 1024 * 1024
+		if (showProgress) {
+			this.showProgress(
+				'Parsing CSV...',
+				`${this.fileName} (${(text.length / 1024 / 1024).toFixed(1)} MB)`
+			)
+		}
+
+		try {
+			const data = await this.parseCSVText(text, showProgress)
+			await this.applyParsedData(data, showProgress)
+		} catch (err) {
+			if (showProgress) this.hideProgress()
+			alert('Error processing CSV: ' + err.message)
+		}
+	}
+
+	parseCSVText(text, showProgress) {
+		return new Promise((resolve, reject) => {
+			Papa.parse(text, {
+				header: false,
+				skipEmptyLines: false,
+				complete: (result) => {
+					if (result.errors?.length && !result.data?.length) {
+						reject(new Error(result.errors[0].message || 'Failed to parse CSV'))
+						return
+					}
+					resolve(result.data)
+				},
+				error: reject,
+				step: showProgress
+					? (results) => {
+							if (results.meta?.cursor) {
+								const pct = Math.min((results.meta.cursor / text.length) * 70, 70)
+								this.updateProgress(pct, `Parsing: ${Math.round(pct)}%`)
+							}
+					  }
+					: undefined,
+			})
+		})
+	}
+
+	async applyParsedData(data, showProgress) {
+		if (showProgress) this.updateProgress(75, 'Processing data...')
+
+		this.csvData = data
+
+		// Strip trailing empty rows
+		while (
+			this.csvData.length > 0 &&
+			this.csvData[this.csvData.length - 1].every((c) => c === '')
+		) {
+			this.csvData.pop()
+		}
+
+		this.originalCsvData = structuredClone(this.csvData)
+		this.updateRowCount()
+
+		if (showProgress) this.updateProgress(90, 'Rendering table...')
+		await new Promise((r) => requestAnimationFrame(r))
+
+		this.renderTable()
+		this.saveBtn.disabled = false
+		this.resetBtn.disabled = false
+
+		if (showProgress) {
+			this.updateProgress(100, 'Done!')
+			setTimeout(() => this.hideProgress(), 500)
 		}
 	}
 
@@ -319,7 +420,7 @@ class CSVEditor {
 
 		if (this.csvData.length === 0) {
 			this.tableContainer.innerHTML =
-				'<div class="placeholder"><p>Drop a CSV file here or click <strong>Upload CSV</strong></p></div>'
+				'<div class="placeholder"><p>Drop a CSV file here, click <button type="button" class="placeholder-link" data-action="upload">Upload CSV</button>, or <button type="button" class="placeholder-link" data-action="paste">Paste CSV</button></p></div>'
 			return
 		}
 

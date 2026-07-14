@@ -39,6 +39,7 @@ body {
 }
 
 .upload-btn,
+.paste-btn,
 .save-btn,
 .reset-btn {
 	padding: 6px 12px;
@@ -51,6 +52,7 @@ body {
 }
 
 .upload-btn:hover,
+.paste-btn:hover,
 .save-btn:hover:not(:disabled),
 .reset-btn:hover:not(:disabled) {
 	background: #f3f4f6;
@@ -115,6 +117,23 @@ body {
 	height: 100%;
 	color: #9ca3af;
 	font-size: 16px;
+}
+
+.placeholder-link {
+	display: inline;
+	padding: 0;
+	border: none;
+	background: none;
+	color: #2563eb;
+	font: inherit;
+	font-weight: 600;
+	cursor: pointer;
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+
+.placeholder-link:hover {
+	color: #1d4ed8;
 }
 
 .csv-table {
@@ -430,4 +449,119 @@ body.drag-over::after {
 	border: 3px dashed #2563eb;
 	z-index: 4000;
 	pointer-events: none;
+}
+
+/* Paste CSV modal */
+.paste-overlay {
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background: rgba(0, 0, 0, 0.5);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 2000;
+	backdrop-filter: blur(2px);
+	padding: 16px;
+}
+
+.paste-overlay.hidden {
+	display: none;
+}
+
+.paste-container {
+	background: white;
+	padding: 20px 24px;
+	border-radius: 8px;
+	box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+	width: 100%;
+	max-width: 640px;
+	max-height: calc(100vh - 32px);
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.paste-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+
+.paste-header h2 {
+	font-size: 16px;
+	font-weight: 600;
+	color: #374151;
+}
+
+.paste-close-btn {
+	border: none;
+	background: transparent;
+	font-size: 22px;
+	line-height: 1;
+	color: #6b7280;
+	cursor: pointer;
+	padding: 0 4px;
+}
+
+.paste-close-btn:hover {
+	color: #111827;
+}
+
+.paste-hint {
+	font-size: 13px;
+	color: #6b7280;
+}
+
+.paste-textarea {
+	width: 100%;
+	min-height: 220px;
+	max-height: 50vh;
+	resize: vertical;
+	padding: 10px 12px;
+	border: 1px solid #d1d5db;
+	border-radius: 4px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 13px;
+	line-height: 1.4;
+	color: #111827;
+	outline: none;
+}
+
+.paste-textarea:focus {
+	border-color: #2563eb;
+	box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.paste-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}
+
+.paste-cancel-btn,
+.paste-load-btn {
+	padding: 6px 12px;
+	border: 1px solid #d1d5db;
+	border-radius: 4px;
+	background: #fff;
+	cursor: pointer;
+	font-size: 13px;
+}
+
+.paste-cancel-btn:hover {
+	background: #f3f4f6;
+	border-color: #9ca3af;
+}
+
+.paste-load-btn {
+	background: #2563eb;
+	color: white;
+	border-color: #2563eb;
+}
+
+.paste-load-btn:hover {
+	background: #1d4ed8;
 }

@@ -14,6 +14,7 @@
 			<div class="controls">
 				<input type="file" id="csvFile" accept=".csv" class="file-input" />
 				<label for="csvFile" class="upload-btn">Upload CSV</label>
+				<button id="pasteBtn" class="paste-btn" type="button">Paste CSV</button>
 				<button id="resetBtn" class="reset-btn" disabled>Reset Changes</button>
 				<button id="saveBtn" class="save-btn" disabled>Save CSV</button>
 			</div>
@@ -22,6 +23,22 @@
 				<span id="rowCount"></span>
 			</div>
 		</header>
+
+		<!-- Paste CSV modal -->
+		<div id="pasteOverlay" class="paste-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="pasteTitle">
+			<div class="paste-container">
+				<div class="paste-header">
+					<h2 id="pasteTitle">Paste CSV Content</h2>
+					<button id="pasteCloseBtn" class="paste-close-btn" type="button" aria-label="Close">&times;</button>
+				</div>
+				<p class="paste-hint">Paste CSV text below (including the header row), then click Load.</p>
+				<textarea id="pasteTextarea" class="paste-textarea" placeholder="name,age,city&#10;Alice,30,New York&#10;Bob,25,London" spellcheck="false"></textarea>
+				<div class="paste-actions">
+					<button id="pasteCancelBtn" class="paste-cancel-btn" type="button">Cancel</button>
+					<button id="pasteLoadBtn" class="paste-load-btn" type="button">Load CSV</button>
+				</div>
+			</div>
+		</div>
 
 		<!-- Progress overlay -->
 		<div id="progressOverlay" class="progress-overlay hidden">
@@ -42,7 +59,7 @@
 		<main class="main-content">
 			<div id="tableContainer" class="table-container">
 				<div class="placeholder">
-					<p>Drop a CSV file here or click <strong>Upload CSV</strong></p>
+					<p>Drop a CSV file here, click <button type="button" class="placeholder-link" data-action="upload">Upload CSV</button>, or <button type="button" class="placeholder-link" data-action="paste">Paste CSV</button></p>
 				</div>
 			</div>
 		</main>
